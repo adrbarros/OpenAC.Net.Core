@@ -8,7 +8,7 @@
 // ***********************************************************************
 // <copyright file="OpenSafeHandle.cs" company="OpenAC .Net">
 //		        		   The MIT License (MIT)
-//	     		    Copyright (c) 2016 Projeto OpenAC .Net
+//	     		    Copyright (c) 2014 - 2022 Projeto OpenAC .Net
 //
 //	 Permission is hereby granted, free of charge, to any person obtaining
 // a copy of this software and associated documentation files (the "Software"),
@@ -35,7 +35,6 @@ using System.Runtime.ConstrainedExecution;
 using System.Runtime.ExceptionServices;
 using System.Runtime.InteropServices;
 using OpenAC.Net.Core.Logging;
-using ExtraConstraints;
 
 namespace OpenAC.Net.Core.InteropServices
 {
@@ -171,7 +170,7 @@ namespace OpenAC.Net.Core.InteropServices
                 return num;
             }
 
-            public static T LoadFunction<[DelegateConstraint]T>(IntPtr procaddress) where T : class
+            public static T LoadFunction<T>(IntPtr procaddress) where T : Delegate
             {
                 if (procaddress == IntPtr.Zero || procaddress == MinusOne) return null;
                 var functionPointer = Marshal.GetDelegateForFunctionPointer(procaddress, typeof(T));
@@ -194,46 +193,33 @@ namespace OpenAC.Net.Core.InteropServices
 
         #region Constructors
 
-        static OpenSafeHandle()
-        {
-            MinusOne = new IntPtr(-1);
-        }
+        static OpenSafeHandle() => MinusOne = new IntPtr(-1);
 
         /// <inheritdoc />
-        protected OpenSafeHandle(string dllPath)
-            : base(IntPtr.Zero, true)
+        protected OpenSafeHandle(string dllPath) : base(IsWindows ? IntPtr.Zero : MinusOne, true)
         {
             methodList = new Dictionary<Type, string>();
             methodCache = new Dictionary<string, Delegate>();
             className = GetType().Name;
 
             var pNewSession = LibLoader.LoadLibrary(dllPath);
-            Guard.Against<OpenException>(pNewSession == IntPtr.Zero, "Não foi possivel carregar a biblioteca.");
             SetHandle(pNewSession);
+            Guard.Against<OpenException>(IsInvalid, "Não foi possivel carregar a biblioteca.");
         }
 
         #endregion Constructors
 
         #region Properties
 
+        private static IntPtr MinusOne { get; }
+
         /// <summary>
-        ///
+        /// Retornar o valor de um handler invalido.
         /// </summary>
-        public static IntPtr MinusOne { get; }
+        protected IntPtr InvalidHandler => IsWindows ? IntPtr.Zero : MinusOne;
 
         /// <inheritdoc />
-        public override bool IsInvalid
-        {
-            get
-            {
-                if (handle != IntPtr.Zero)
-                {
-                    return (handle == MinusOne);
-                }
-
-                return true;
-            }
-        }
+        public override sealed bool IsInvalid => InvalidHandler == handle;
 
         public static bool IsWindows => LibLoader.IsWindows;
 
@@ -265,7 +251,7 @@ namespace OpenAC.Net.Core.InteropServices
         /// </summary>
         /// <param name="functionName">Nome da função para exportar</param>
         /// <typeparam name="T">Delegate da função</typeparam>
-        protected virtual void AddMethod<[DelegateConstraint]T>(string functionName) where T : class
+        protected virtual void AddMethod<T>(string functionName) where T : Delegate
         {
             methodList.Add(typeof(T), functionName);
         }
@@ -276,7 +262,7 @@ namespace OpenAC.Net.Core.InteropServices
         /// <typeparam name="T">Delegate</typeparam>
         /// <returns></returns>
         /// <exception cref="OpenException"></exception>
-        protected virtual T GetMethod<[DelegateConstraint]T>() where T : class
+        protected virtual T GetMethod<T>() where T : Delegate
         {
             if (!methodList.ContainsKey(typeof(T))) throw CreateException($"Função não adicionada para o [{nameof(T)}].");
 
@@ -291,7 +277,7 @@ namespace OpenAC.Net.Core.InteropServices
             var methodHandler = LibLoader.LoadFunction<T>(mHandler);
             this.Log().Debug($"{className} : Método [{method}] carregado.");
 
-            methodCache.Add(method, methodHandler as Delegate);
+            methodCache.Add(method, methodHandler);
             return methodHandler;
         }
 
@@ -315,6 +301,11 @@ namespace OpenAC.Net.Core.InteropServices
             }
         }
 
+        /// <summary>
+        /// Executa a função e trata erros nativos.
+        /// </summary>
+        /// <param name="method"></param>
+        /// <exception cref="OpenException"></exception>
         [HandleProcessCorruptedStateExceptions]
         protected virtual void ExecuteMethod(Action method)
         {
